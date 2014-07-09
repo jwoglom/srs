@@ -1,0 +1,12 @@
+set +e
+if [ -x /etc/opt/SUNWut/xinitrc.d/0010.SUNWut.xdmEnv ]; then
+    . /etc/opt/SUNWut/xinitrc.d/0010.SUNWut.xdmEnv
+fi 
+
+if [ -x /etc/opt/SUNWut/xinitrc.d/0100.SUNWut ]; then
+	#SUN_SUNRAY_UTXLOCK_PREF=
+	#export SUN_SUNRAY_UTXLOCK_PREF
+    . /etc/opt/SUNWut/xinitrc.d/0100.SUNWut
+fi
+
+set -e

@@ -1,0 +1,31 @@
+set +e
+pkill -U $USER esd
+pkill -U $USER pulseaudio
+set -e
+
+unset LD_PRELOAD
+
+if [ "${UTAUDIODEV}" != "" ] ; then
+
+  if [ ! -d ${HOME}/.pulse ] ; then
+    mkdir ${HOME}/.pulse
+  fi
+
+  # create pulseaudio configuration for utaudio
+  PULSECONF=${HOME}/.pulse/default.pa
+  sed "s|UTAUDIODEV|$UTAUDIODEV|g" /opt/SUNWut/lib/utpulse.pa > ${PULSECONF}
+
+  # create asoundrc for pulseaudio redirection
+  ASOUNDRC=${HOME}/.asoundrc
+  echo -n > ${ASOUNDRC}
+  echo "pcm.!default { " >> ${ASOUNDRC}
+  echo "  type pulse" >> ${ASOUNDRC}
+  echo "}" >> ${ASOUNDRC}
+  echo "ctl.!default { " >> ${ASOUNDRC}
+  echo "  type pulse" >> ${ASOUNDRC}
+  echo "}" >> ${ASOUNDRC}
+else
+  if [ -d ${HOME}/.pulse ] ; then
+    rm -f ${HOME}/.pulse/default.pa
+  fi
+fi

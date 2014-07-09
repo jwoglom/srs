@@ -1,0 +1,436 @@
+diff -r -u -N -X /tmp/exclude /usr/src/SUNWut.orig/utadem/utadem.c /usr/src/SUNWut/utadem/utadem.c
+--- /usr/src/SUNWut.orig/utadem/utadem.c	2011-04-23 07:52:23.000000000 +0200
++++ /usr/src/SUNWut/utadem/utadem.c	2011-08-08 16:10:36.887881396 +0200
+@@ -455,14 +455,14 @@
+ static int daemon_write(struct file *file, const char *ubuf, size_t size);
+ static unsigned int user_poll(struct file *file,
+     struct poll_table_struct *wait);
+-static int user_ioctl(struct inode *inode, struct file *file,
++static long user_ioctl(struct file *file,
+     unsigned int cmd, unsigned long arg);
+-static int daemon_ioctl(struct inode *inode, struct file *file,
++static long daemon_ioctl(struct file *file,
+     unsigned int cmd, unsigned long arg);
+ 
+-static int oss_ioctl(struct inode *inode, struct file *file,
++static long oss_ioctl(struct file *file,
+     unsigned int cmd, unsigned long arg);
+-static int mix_ioctl(struct inode *inode, struct file *file,
++static long mix_ioctl(struct file *file,
+     unsigned int cmd, unsigned long arg);
+ static int mix_read_ioctl(struct uta_session *sess, int channel, int *arg);
+ static int mix_write_ioctl(struct uta_session *sess, int channel, int *arg);
+@@ -653,8 +653,8 @@
+ 	}
+ 	INIT_LIST_HEAD(&sess->messages);
+ 	spin_lock_init(&sess->msg_lock);
+-	init_MUTEX_LOCKED(&sess->msg_sem);
+-	init_MUTEX_LOCKED(&sess->reset_sem);
++	sema_init(&sess->msg_sem, 0);
++	sema_init(&sess->reset_sem, 0);
+ #ifndef __lock_lint			/* lock not needed since the session unlisted */
+ 	sess->dformats = 0;
+ 	sess->dchannels = 0;
+@@ -1733,8 +1733,8 @@
+  * all the user ioctl() helper functions are open to re-entrancy - protect
+  * them with conn->syscall_rwsem, if needed.
+  */
+-static int
+-user_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++user_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+ 	struct uta_connect *conn = (struct uta_connect *) file->private_data;
+@@ -1746,9 +1746,9 @@
+ 
+ 	ret = -ENOTTY;
+ 	if (conn->role == UTA_USER)
+-		ret = oss_ioctl(inode, file, cmd, arg);
++		ret = oss_ioctl(file, cmd, arg);
+ 	else if (conn->role == UTA_MIXER)
+-		ret = mix_ioctl(inode, file, cmd, arg);
++		ret = mix_ioctl(file, cmd, arg);
+ 
+ 	up_write(&conn->syscall_rwsem);
+ 	return (ret);
+@@ -1758,8 +1758,8 @@
+  * This function is re-entrant - protect each block internally with read or
+  * write locking on conn->syscall_rwsem!
+  */
+-static int
+-daemon_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++daemon_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+ 	struct uta_connect *conn = (struct uta_connect *) file->private_data;
+@@ -1864,8 +1864,8 @@
+ 	return (-ENOTTY);
+ }
+ 
+-static int
+-oss_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++oss_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+ 	struct uta_connect *conn = (struct uta_connect *) file->private_data;
+@@ -2112,15 +2112,15 @@
+ 	default:
+ 		// may be the mixer knows the command
+ 		DPRINTF(4, " - command unknown; forwarding command to mixer");
+-		return mix_ioctl(inode, file, cmd, arg);
++		return mix_ioctl(file, cmd, arg);
+ 	}
+ 
+ 	DPRINTF(4, "oss_ioctl - unknown ioctl: 0x%08x (%d)\n", cmd, cmd);
+ 	return (-ENOTTY);
+ }
+ 
+-static int
+-mix_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++mix_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+ 	struct uta_connect *conn = (struct uta_connect *) file->private_data;
+@@ -2443,24 +2443,30 @@
+ 	return (ret);
+ }
+ 
+-static int
+-utadem_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++utadem_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+ 	int ret;
+-	struct uta_connect *conn = connect((struct uta_connect *) file->private_data);
+-	struct uta_session *sess = ref_session(conn->session);
++	struct uta_connect *conn;
++	struct uta_session *sess;
+ 
+ 	DPRINTF(2, "entering %s()\n", __FUNCTION__);
+ 
++	lock_kernel();        /* Big Kernel Lock */
++	
++	conn = connect((struct uta_connect *) file->private_data);
++	sess = ref_session(conn->session);
++
+ 	if (conn->role == UTA_USER || conn->role == UTA_MIXER)
+-		ret = user_ioctl(inode, file, cmd, arg);
++		ret = user_ioctl(file, cmd, arg);
+ 	else
+-		ret = daemon_ioctl(inode, file, cmd, arg);
++		ret = daemon_ioctl(file, cmd, arg);
+ 
+ 	unref_session(sess);
+ 	disconnect(conn);
+ 
++	unlock_kernel();
+ 	return (ret);
+ }
+ 
+@@ -2471,9 +2477,7 @@
+ 
+ 	DPRINTF(2, "entering %s()\n", __FUNCTION__);
+ 
+-	lock_kernel();				/* Big Kernel Lock */
+-	ret = utadem_ioctl(file->f_dentry->d_inode, file, cmd, arg);
+-	unlock_kernel();
++	ret = utadem_ioctl(file, cmd, arg);
+ 
+ 	return (long)(ret);
+ }
+@@ -2497,8 +2501,8 @@
+ 	conn->session = NULL;
+ 	conn->role = UTA_NONE;
+ #endif
+-	init_MUTEX(&conn->read_sem);
+-	init_MUTEX(&conn->write_sem);
++	sema_init(&conn->read_sem, 1);
++	sema_init(&conn->write_sem, 1);
+ 	init_rwsem(&conn->syscall_rwsem);
+ 	atomic_set(&conn->refcount, 0);
+ 
+@@ -2608,7 +2612,7 @@
+ 	read:		utadsp_read,
+ 	write:		utadsp_write,
+ 	poll:		utadsp_poll,
+-	ioctl:		utadem_ioctl,
++	unlocked_ioctl:	utadem_ioctl,
+ 	compat_ioctl:	utadem_compat_ioctl,
+ 	open:		utadsp_open,
+ 	release:	utadsp_release,
+@@ -2633,8 +2637,8 @@
+ 	conn->session = NULL;
+ 	conn->role = UTA_NONE;
+ #endif
+-	init_MUTEX(&conn->read_sem);
+-	init_MUTEX(&conn->write_sem);
++	sema_init(&conn->read_sem, 1);
++	sema_init(&conn->write_sem, 1);
+ 	init_rwsem(&conn->syscall_rwsem);
+ 	atomic_set(&conn->refcount, 0);
+ 
+@@ -2694,7 +2698,7 @@
+ static struct file_operations utamix_fops = {
+ 	owner:		THIS_MODULE,
+ 	llseek:		no_llseek,
+-	ioctl:		utadem_ioctl,
++	unlocked_ioctl:	utadem_ioctl,
+ 	open:		utamix_open,
+ 	release:	utamix_release,
+ };
+diff -r -u -N -X /tmp/exclude /usr/src/SUNWut.orig/utdisk/utdisk.c /usr/src/SUNWut/utdisk/utdisk.c
+--- /usr/src/SUNWut.orig/utdisk/utdisk.c	2011-04-23 07:52:25.000000000 +0200
++++ /usr/src/SUNWut/utdisk/utdisk.c	2011-08-08 16:10:36.887881396 +0200
+@@ -82,7 +82,7 @@
+ #if LINUX_VERSION_CODE < KERNEL_VERSION(2,6,28)
+ 	.ioctl =		utdisk_ioctl,
+ #else
+-	.locked_ioctl =		utdisk_ioctl,
++	.ioctl =		utdisk_ioctl,
+ #endif
+ 	.compat_ioctl =		utdisk_compat_ioctl,
+ 	.release =		utdisk_release,
+diff -r -u -N -X /tmp/exclude /usr/src/SUNWut.orig/utdisk/utdiskctl.c /usr/src/SUNWut/utdisk/utdiskctl.c
+--- /usr/src/SUNWut.orig/utdisk/utdiskctl.c	2011-04-23 07:52:25.000000000 +0200
++++ /usr/src/SUNWut/utdisk/utdiskctl.c	2011-08-08 16:10:36.887881396 +0200
+@@ -60,7 +60,7 @@
+ 				size_t count, loff_t *ppos);
+ static ssize_t	utstk_file_write(struct file *fp, const char *bufp,
+ 				size_t count, loff_t *ppos);
+-static int	utstk_ioctl(struct inode *inode, struct file *fp,
++static long	utstk_ioctl(struct file *fp,
+ 				unsigned int command, unsigned long arg);
+ static long	utstk_compat_ioctl(struct file *fp,
+ 				unsigned int command, unsigned long arg);
+@@ -91,7 +91,7 @@
+ 	.write		= utstk_file_write,
+ 	.open		= utstk_open,
+ 	.release	= utstk_release,
+-	.ioctl		= utstk_ioctl,
++	.unlocked_ioctl	= utstk_ioctl,
+ 	.compat_ioctl	= utstk_compat_ioctl,
+ 	.owner		= THIS_MODULE,
+ };
+@@ -541,37 +541,40 @@
+ 	int	ret;
+ 
+ 	utprintf("%s: cmd=%x\n", __FUNCTION__, command);
+-	lock_kernel();			/* Big Kernel Lock */
+-	ret = utstk_ioctl(fp->f_dentry->d_inode, fp,
++	ret = utstk_ioctl(fp,
+ 					(command | UTDISK_32BIT_PTRS), arg);
+-	unlock_kernel();
+ 
+ 	return (long)(ret);
+ }
+ 
+ 
+ /* ioctl */
+-static int
+-utstk_ioctl(struct inode *inode, struct file *fp, unsigned int command,
++static long
++utstk_ioctl(struct file *fp, unsigned int command,
+ 		unsigned long arg)
+ {
+ 	utdisk_state_t	*dsp;
+-	minor_t		mnum = iminor(inode);
++	minor_t		mnum;
+ 	int		ret = 0;
+ 	int		flag32ptr;
+ 
++	lock_kernel();      /* Big Kernel Lock */
++
++	mnum = iminor(fp->f_dentry->d_inode);
+ 	flag32ptr = (command & UTDISK_32BIT_PTRS);
+ 	command &= ~UTDISK_32BIT_PTRS;
+ 	utprintf("%s: minor=%d, command=%x\n", __FUNCTION__, mnum, command);
+ 
+ 	/* Note: most ioctls are allowed for master only */
+ 	if ((command != UTDISK_GET_MESG) && (mnum != UTDISK_MASTER_INSTANCE)) {
++		unlock_kernel();
+ 		return (-ENOTTY);
+ 	}
+ 
+ 	dsp = utstk_acquire_state(mnum, UTDISK_STATE_VALIDATE);
+ 	if (dsp == NULL) {
+ 		utprintf("%s: minor=%d: no state\n", __FUNCTION__, mnum);
++		unlock_kernel();
+ 		return (-ENXIO);
+ 	}
+ 	if (command != UTDISK_GET_MESG) {
+@@ -580,6 +583,7 @@
+ 	} else if (mnum == UTDISK_MASTER_INSTANCE) {
+ 		/* cannot perform I/O on master */
+ 		utstk_release_state(dsp);
++		unlock_kernel();
+ 		return (-ENOTTY);
+ 	}
+ 
+@@ -622,6 +626,7 @@
+ 		break;
+ 	}
+ 
++	unlock_kernel();
+ 	return (ret);
+ }
+ 
+diff -r -u -N -X /tmp/exclude /usr/src/SUNWut.orig/utio/utio.c /usr/src/SUNWut/utio/utio.c
+--- /usr/src/SUNWut.orig/utio/utio.c	2011-04-23 07:52:24.000000000 +0200
++++ /usr/src/SUNWut/utio/utio.c	2011-08-08 16:11:04.267969440 +0200
+@@ -528,7 +528,7 @@
+ /* fops helpers */
+ static int daemon_read(struct uta_connect *conn, char *ubuf, size_t size);
+ static int daemon_write(struct uta_connect *conn, const char *ubuf, size_t size);
+-static int daemon_ioctl(struct inode *inode, struct file *file,
++static int daemon_ioctl(struct file *file,
+     struct uta_connect *conn, unsigned int cmd, unsigned long arg);
+ static unsigned int daemon_poll(struct file *file, struct uta_connect *conn,
+     struct poll_table_struct *wait);
+@@ -1024,7 +1024,7 @@
+ 	init_waitqueue_head(&sess->daemon_wait);
+ 	INIT_LIST_HEAD(&sess->messages_to_master);
+ 	spin_lock_init(&sess->msg_lock_master);
+-	init_MUTEX_LOCKED(&sess->msg_sem_master);
++	sema_init(&sess->msg_sem_master, 0);
+ 
+ 	DPRINTF(3, "%s: session %d created for user %d\n",
+ 					__FUNCTION__, sess->id, owner);
+@@ -2609,11 +2609,12 @@
+  * them with conn->syscall_rwsem, if needed.
+  */
+ static int
+-daemon_ioctl(struct inode *inode, struct file *file, struct uta_connect *conn,
++daemon_ioctl(struct file *file, struct uta_connect *conn,
+ 	     unsigned int cmd, unsigned long arg)
+ {
+ 	struct uta_session *sess;
+ 	int ret;
++	struct inode *inode = file->f_dentry->d_inode;
+ 
+ 	WLD_FILL_ENTRY(0x30000, cmd, conn);
+ 	DPRINTF(2, "entering %s()\n", __FUNCTION__);
+@@ -2707,7 +2708,6 @@
+ 	utio_pmsg_t		parm64;
+ 	compat_utio_pmsg_t	parm32;
+ 	int ret = -ENOTTY;
+-	struct inode *inode = file->f_dentry->d_inode;
+ 
+ 	/* utio_compat_ioctl calls us with lock_kernel() held */
+ 
+@@ -2775,7 +2775,7 @@
+ 
+ 	/* all other ioctls do not need conversion */
+ 	DPRINTF(2, "%s(): calling daemon_ioctl()\n", __FUNCTION__);
+-	ret = daemon_ioctl(inode, file, conn, cmd, arg);
++	ret = daemon_ioctl(file, conn, cmd, arg);
+ 	RELEASE_CONNECTION(conn);
+ 	DPRINTF(2, "exiting %s(): ret == %d\n", __FUNCTION__, ret);
+ 	return (ret);
+@@ -2844,7 +2844,7 @@
+ 	conn->role = UTA_USER;
+ 	INIT_LIST_HEAD(&sess->messages_to_slave);
+ 	spin_lock_init(&sess->msg_lock_slave);
+-	init_MUTEX_LOCKED(&sess->msg_sem_slave);
++	sema_init(&sess->msg_sem_slave, 0);
+ 
+ 	/* leave the session ref'ed - it is now ready */
+ 	set_has_user(sess, 1);
+@@ -3108,13 +3108,15 @@
+  *       UTIO_GETDEVID is used to set up a new session and
+  *       set conn->role = UTA_DAEMON.
+  */
+-static int
+-utio_ioctl(struct inode *inode, struct file *file, unsigned int cmd,
++static long
++utio_ioctl(struct file *file, unsigned int cmd,
+     unsigned long arg)
+ {
+-	int ret;
++	long ret;
+ 	struct uta_connect *conn;
+ 
++	lock_kernel();
++
+ 	WLD_FILL_ENTRY(0xf000, NULL, NULL);
+ 	DPRINTF(2, "entering %s()\n", __FUNCTION__);
+ 
+@@ -3126,13 +3128,14 @@
+ 	 * so no locks are needed here.
+ 	 */
+ 	if (conn->role == UTA_USER)
+-		ret = user_ioctl(inode, conn, cmd, arg);
++		ret = user_ioctl(file->f_dentry->d_inode, conn, cmd, arg);
+ 	else
+-		ret = daemon_ioctl(inode, file, conn, cmd, arg);
++		ret = daemon_ioctl(file, conn, cmd, arg);
+ 
+ 	WLD_FILL_ENTRY(0xf001, NULL, NULL);
+ 	DPRINTF(2, "exiting %s()\n", __FUNCTION__);
+ 	RELEASE_CONNECTION(conn);
++	unlock_kernel();
+ 	return (ret);
+ }
+ 
+@@ -3140,31 +3143,32 @@
+ static long
+ utio_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+ {
+-	int ret;
++	long ret;
+ 
+ 	DPRINTF(2, "entering %s()\n", __FUNCTION__);
+ 
+-	lock_kernel();
+-
+ 	switch (cmd) {
+ 
+ #if defined(CONFIG_COMPAT) || defined(CONFIG_SPARC64) || defined(CONFIG_X86_64) || defined(CONFIG_PPC64)
+ 
+ 	case COMPAT_UTIO_GETMSG:	/* fall through */
+ 	case COMPAT_UTIO_PUTMSG:
++		lock_kernel();
+ 		ret = compat_daemon_ioctl(cmd, arg, file);
++		unlock_kernel();
+ 		break;
+ 	case COMPAT_PPGETTIME:
++		lock_kernel();
+ 		ret = compat_paralleld_ioctl(cmd, arg, file);
++		unlock_kernel();
+ 		break;
+ 
+ #endif	/* CONFIG_COMPAT */
+ 
+ 	default:
+-		ret = utio_ioctl(file->f_dentry->d_inode, file, cmd, arg);
++		ret = utio_ioctl(file, cmd, arg);
+ 		break;
+ 	}
+-	unlock_kernel();
+ 
+ 	DPRINTF(2, "exiting %s()\n", __FUNCTION__);
+ 	return (ret);
+@@ -3207,8 +3211,8 @@
+ 	conn->session = NULL;
+ 	conn->role = UTA_NONE;
+ 	conn->refcount = 1;
+-	init_MUTEX(&conn->read_sem);
+-	init_MUTEX(&conn->write_sem);
++	sema_init(&conn->read_sem, 1);
++	sema_init(&conn->write_sem, 1);
+ 	init_rwsem(&conn->syscall_rwsem);
+ 	init_waitqueue_head(&conn->release_wait);
+ 	WLD_FILL_ENTRY(0x10002, conn, NULL);
+@@ -3526,7 +3530,7 @@
+ 	read:		utio_read,
+ 	write:		utio_write,
+ 	poll:		utio_poll,
+-	ioctl:		utio_ioctl,
++	unlocked_ioctl:	utio_ioctl,
+ 	compat_ioctl:	utio_compat_ioctl,
+ 	open:		utio_open,
+ 	release:	utio_release,

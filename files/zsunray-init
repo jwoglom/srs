@@ -1,0 +1,46 @@
+#!/bin/sh
+
+NAME=sunray
+DESC="Sunray services"
+#exit 0
+case "$1" in
+  start)
+ [ ! -d /etc/X11/xdm ]  && mkdir -p /etc/X11/xdm
+ [ ! -f /bin/awk ]      && ln -s /usr/bin/awk /bin/awk
+ [ ! -f /bin/basename ] && ln -s /usr/bin/basename /bin/basename
+
+ [ ! -d /tmp/.esd ] && mkdir /tmp/.esd
+ chmod 1777 /tmp/.esd
+
+
+ echo "Starting $DESC: $NAME"
+ /etc/init.d/utacleanup start
+ /etc/init.d/utds start
+ /etc/init.d/utsyscfg start
+ [ -x /etc/init.d/utstorage ] && /etc/init.d/utstorage start
+ /etc/init.d/utsvc start
+ 
+ chmod 666 /dev/dsp /dev/mixer
+        sleep 2
+ /etc/init.d/utwadmin start
+ ;;
+  stop)
+ echo "Stopping $DESC: $NAME "
+ /etc/init.d/utwadmin stop
+ /etc/init.d/utsvc stop
+ [ -x /etc/init.d/utstorage ] && /etc/init.d/utstorage stop
+ /etc/init.d/utacleanup stop
+ /etc/init.d/utds stop
+ /etc/init.d/utsyscfg stop
+ sleep 3
+ /usr/bin/pkill -9 Xnewt
+ /usr/bin/pkill utaction
+ ;;
+  *)
+ N=/etc/init.d/$NAME
+ echo "Usage: $N {start|stop}" >&2
+ exit 1
+ ;;
+esac
+
+exit 0
